@@ -41,7 +41,6 @@
 /*******************************************************************************
  * Definitions
  ******************************************************************************/
-#define PARENT_TIMEOUT 60 * CLOCK_SECOND
 #define NEG_INF -999
 #define RSSI_NODO_PERDIDO -400
 /*******************************************************************************
@@ -51,8 +50,6 @@
 /*******************************************************************************
  * Variables
  ******************************************************************************/
-uint16_t total_rssi;
-
 struct beacon b;
 struct node n;
 
@@ -62,7 +59,7 @@ struct list_unicast_msg *l;
 MEMB(preferred_parent_mem, struct preferred_parent, 30); // LISTA ENLAZADA
 LIST(preferred_parent_list);
 
-MEMB(unicast_msg_mem, struct list_unicast_msg, 255);
+MEMB(unicast_msg_mem, struct list_unicast_msg, 50);
 LIST(unicast_msg_list);
 
 PROCESS(send_beacon, "Enviar beacons");
@@ -73,15 +70,6 @@ PROCESS(retx_unicast_msg, "Retrasmitir mensaje unicast");
 
 AUTOSTART_PROCESSES(&send_beacon, &select_parent, &send_unicast, &retx_unicast_msg, &eliminar_padre); //
 
-/*---------------------------------------------------------------------------
-void remove_parent(void *n)
-{
-  struct preferred_parent *e = n;
-  list_remove(preferred_parent_list, e);
-  memb_free(&preferred_parent_mem, e);
-}
----------------------------------------------------------------------------*/
-
 /*---------------------------------------------------------------------------*/
 static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
 {
@@ -90,7 +78,7 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
 
   // RSSI
   uint16_t last_rssi = packetbuf_attr(PACKETBUF_ATTR_RSSI);
-  total_rssi = b_recv.rssi_p + last_rssi;
+  uint16_t total_rssi = b_recv.rssi_p + last_rssi;
 
   struct preferred_parent *in_l; // in to list
 
@@ -109,7 +97,6 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
       {
         // YA estaba en la lista ACTUALIZAR
         p->rssi_a = b_recv.rssi_p + last_rssi; // Guardo del rssi. El rssi es igual al rssi_path + rssi del broadcast
-        // ctimer_set(&p->ctimer, PARENT_TIMEOUT, remove_parent, p);
         // printf("beacon updated to list with RSSI_A = %d\n", p->rssi_a);
         break;
       }
@@ -130,8 +117,7 @@ static void broadcast_recv(struct broadcast_conn *c, const linkaddr_t *from)
         in_l->id = b_recv.id; // Guardo el id del nodo
         // rssi_ac es el rssi del padre + el rssi del enlace al padre
         in_l->rssi_a = b_recv.rssi_p + last_rssi; // Guardo del rssi acumulado. El rssi acumulado es el rssi divulgado por el nodo (rssi_path) + el rssi medido del beacon que acaba de llegar (rss)
-        // ctimer_set(&in_l->ctimer, PARENT_TIMEOUT, remove_parent, in_l);
-        list_push(preferred_parent_list, in_l); // Add an item to the start of the list.
+        list_push(preferred_parent_list, in_l);   // Add an item to the start of the list.
         // printf("beacon added to list: id = %d rssi_a = %d\n", in_l->id.u8[0], in_l->rssi_a);
       }
     }
@@ -207,10 +193,10 @@ PROCESS_THREAD(select_parent, ev, data)
         if (n.preferred_parent.u8[0] != new_parent.u8[0])
         {
           printf("#L %d 0\n", n.preferred_parent.u8[0]); // 0: old parent
-          printf("lowest_rssi = %d \n", lowest_rssi);
+          //printf("lowest_rssi = %d \n", lowest_rssi);
 
           linkaddr_copy(&n.preferred_parent, &new_parent);
-          printf("new_parent = %d \n", new_parent.u8[0]);
+          //printf("new_parent = %d \n", new_parent.u8[0]);
           printf("#L %d 1\n", n.preferred_parent.u8[0]); //: 1: new parent
         }
         // update parent rssi
@@ -250,7 +236,7 @@ PROCESS_THREAD(send_unicast, ev, data)
 
     if (n.rssi_p > RSSI_NODO_PERDIDO) // valor rssi promedio cuando no se encuentra conectado al nodo raiz
     {
-      printf("ENVIANDO UNICAST\n");
+      //printf("ENVIANDO UNICAST\n");
       unicast_send(&unicast, &n.preferred_parent);
     }
   }
@@ -274,8 +260,22 @@ PROCESS_THREAD(eliminar_padre, ev, data)
 
     if (list_length(preferred_parent_list) > 1)
     {
-      printf("ELIMINANDO ULTIMO OBJETO DE LA LISTA \n");
-      list_chop(preferred_parent_list);
+      // printf("ELIMINANDO ULTIMO OBJETO DE LA LISTA \n");
+      //  p = list_chop(preferred_parent_list);
+
+      // recorrer la LISTA
+      // printf("-------\n");
+      for (p = list_head(preferred_parent_list); p != NULL; p = list_item_next(p))
+      {
+        if (list_item_next(p) == NULL)
+        {
+          // printf("ULTIMO EN LA LISTA ID=%d RSSI_A = %d \n", p->id.u8[0], p->rssi_a);
+          list_remove(preferred_parent_list, p);
+          memb_free(&preferred_parent_mem, p);
+          break;
+        }
+      }
+      // printf("-------\n");
     }
   }
   PROCESS_END();
@@ -303,11 +303,6 @@ PROCESS_THREAD(retx_unicast_msg, ev, data)
       list_remove(unicast_msg_list, l);
       memb_free(&unicast_msg_mem, l);
     }
-
-    /*
-    if (!linkaddr_cmp(&n.preferred_parent, &linkaddr_null))
-        {}
-    */
   }
   PROCESS_END();
 }
